@@ -49,42 +49,58 @@ export function explainReview(text: string, result: GateDecision): AgentReview {
 }
 
 export function createReviewer({ harnessArn, guardrailId, guardrailVersion, region }: ReviewerConfig): Reviewer {
-  const agent = new BedrockAgentCoreClient({ region, maxAttempts: 1 })
-  const bedrock = new BedrockRuntimeClient({ region, maxAttempts: 1 })
+  const agent = new BedrockAgentCoreClient({
+    region,
+    maxAttempts: 2,
+    requestHandler: { connectionTimeout: 2_500, requestTimeout: 9_000, throwOnRequestTimeout: true },
+  })
+  const bedrock = new BedrockRuntimeClient({
+    region,
+    maxAttempts: 2,
+    requestHandler: { requestTimeout: 3_500, disableConcurrentStreams: true },
+  })
 
   return async (result, note) => {
     if (!harnessArn) return unavailable
     const abortSignal = AbortSignal.timeout(24_000)
-    if (note) {
-      if (!guardrailId || !guardrailVersion) return unavailable
-      const guard = await bedrock.send(new ApplyGuardrailCommand({
-        guardrailIdentifier: guardrailId,
-        guardrailVersion,
-        source: 'INPUT',
-        content: [{ text: { text: note, qualifiers: ['guard_content'] } }],
-      }), { abortSignal })
-      if (guard.action === 'GUARDRAIL_INTERVENED') {
-        return { status: 'note_blocked', explanation: null }
+    let phase = 'Guardrails'
+    try {
+      if (note) {
+        if (!guardrailId || !guardrailVersion) return unavailable
+        const guard = await bedrock.send(new ApplyGuardrailCommand({
+          guardrailIdentifier: guardrailId,
+          guardrailVersion,
+          source: 'INPUT',
+          content: [{ text: { text: note, qualifiers: ['guard_content'] } }],
+        }), { abortSignal: AbortSignal.any([abortSignal, AbortSignal.timeout(8_000)]) })
+        if (guard.action === 'GUARDRAIL_INTERVENED') {
+          return { status: 'note_blocked', explanation: null }
+        }
+        if (guard.action !== 'NONE') throw new Error('Unknown guardrail action')
       }
-      if (guard.action !== 'NONE') throw new Error('Unknown guardrail action')
-    }
 
-    const response = await agent.send(new InvokeHarnessCommand({
-      harnessArn,
-      runtimeSessionId: randomUUID(),
-      allowedTools: [],
-      messages: [{
-        role: 'user',
-        content: [{ text: JSON.stringify({ verdict: result.verdict, untrustedChangeNote: note }) }],
-      }],
-    }), { abortSignal })
-    let text = ''
-    let stop
-    for await (const event of response.stream ?? []) {
-      if (event.contentBlockStart?.start?.toolUse) return incomplete
-      text += event.contentBlockDelta?.delta?.text ?? ''
-      if (event.messageStop) stop = event.messageStop.stopReason
+      phase = 'AgentCore request'
+      const response = await agent.send(new InvokeHarnessCommand({
+        harnessArn,
+        runtimeSessionId: randomUUID(),
+        allowedTools: [],
+        messages: [{
+          role: 'user',
+          content: [{ text: JSON.stringify({ verdict: result.verdict, untrustedChangeNote: note }) }],
+        }],
+      }), { abortSignal })
+      phase = 'AgentCore stream'
+      let text = ''
+      let stop
+      for await (const event of response.stream ?? []) {
+        if (event.contentBlockStart?.start?.toolUse) return incomplete
+        text += event.contentBlockDelta?.delta?.text ?? ''
+        if (event.messageStop) stop = event.messageStop.stopReason
+      }
+      return stop === 'end_turn' ? explainReview(text, result) : incomplete
+    } catch (error) {
+      console.warn('Review service unavailable', phase, error instanceof Error ? error.name : 'Error')
+      return unavailable
     }
-    return stop === 'end_turn' ? explainReview(text, result) : incomplete
   }
 }

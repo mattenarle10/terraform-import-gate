@@ -4,7 +4,6 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { explainReview } from '../src/agent.ts'
 import { createApp } from '../src/app.ts'
-import { page } from '../src/page.ts'
 import { decide, summarizePlan, validateSummary } from '../src/plan.ts'
 
 const address = 'aws_cloudwatch_log_group.app'
@@ -78,11 +77,57 @@ test('blocks additional changes, state moves, and provider actions', () => {
   assert.equal(reviewPlan({ ...plan, resource_changes: [moved] }).verdict, 'BLOCKED')
 })
 
+test('blocks output writes without including output names or values', () => {
+  for (const action of ['create', 'update', 'delete']) {
+    const summary = summarizePlan({
+      ...plan,
+      output_changes: { private_output: { actions: [action], before: null, after: 'private-value' } },
+    }, target)
+    assert.equal(summary.complete, false)
+    const result = decide(validateSummary(summary))
+    assert.equal(result.verdict, 'BLOCKED')
+    assert.deepEqual(result.reasons, ['The plan would also change Terraform outputs.'])
+    assert.ok(!/private_output|private-value/.test(JSON.stringify(summary)))
+  }
+  assert.equal(reviewPlan({
+    ...plan,
+    output_changes: { existing: { actions: ['no-op'] } },
+  }).verdict, 'IMPORT ONLY')
+  const legacy = summarizePlan(plan, target)
+  delete legacy.outputChanges
+  assert.deepEqual(decide(validateSummary(legacy)).reasons, [
+    'Export the plan summary again to check Terraform outputs.',
+  ])
+})
+
 test('blocks no import, truncated and incomplete plans', () => {
   assert.equal(reviewPlan({ ...plan, resource_changes: [] }).verdict, 'BLOCKED')
   assert.equal(reviewPlan({ ...plan, complete: false }).verdict, 'BLOCKED')
   const largePlan = { ...plan, resource_changes: Array(65).fill(importedGroup) }
   assert.equal(reviewPlan(largePlan).verdict, 'BLOCKED')
+})
+
+test('counts only relevant actions toward the summary limit', () => {
+  const unchanged = Array.from({ length: 512 }, (_, index) => ({
+    address: `terraform_data.queue[${index}]`,
+    type: 'terraform_data',
+    mode: 'managed',
+    change: { actions: ['no-op'] },
+  }))
+  const resources = [importedGroup, ...unchanged]
+  assert.equal(reviewPlan({ ...plan, resource_changes: resources }).verdict, 'IMPORT ONLY')
+
+  const created = unchanged.slice(0, 64).map(resource => ({
+    ...resource,
+    change: { actions: ['create'] },
+  }))
+  const atLimit = summarizePlan({ ...plan, resource_changes: [...resources, ...created.slice(0, 63)] }, target)
+  const overLimit = summarizePlan({ ...plan, resource_changes: [...resources, ...created] }, target)
+  assert.equal(atLimit.changes.length, 64)
+  assert.equal(atLimit.complete, true)
+  assert.equal(overLimit.changes.length, 64)
+  assert.equal(overLimit.complete, false)
+  assert.equal(decide(overLimit).verdict, 'BLOCKED')
 })
 
 test('requires authentication and keeps the rule verdict when the agent is unavailable', async () => {
@@ -96,6 +141,16 @@ test('requires authentication and keeps the rule verdict when the agent is unava
     },
   })
   const summary = summarizePlan(plan, { ...target, id: 'wrong-id' })
+  const unlock = (authorization?: string) => app.request('/unlock', {
+    method: 'POST',
+    headers: authorization ? { authorization } : {},
+  })
+  assert.equal((await unlock()).status, 401)
+  assert.equal((await unlock('Bearer wrong')).status, 401)
+  const unlocked = await unlock('Bearer ' + token)
+  assert.equal(unlocked.status, 204)
+  assert.equal(await unlocked.text(), '')
+  assert.equal(agentCalls, 0)
   const request = (authorization: string) => app.request('/review', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', authorization },
@@ -118,8 +173,22 @@ test('suppresses a model reply that conflicts with the gate or contains extra pr
   assert.equal(explainReview('```json\n{"verdict":"BLOCKED","disposition":"refuse"}\n```', decision).status, 'refused')
 })
 
-test('the inline browser script parses', () => {
-  const script = page.split('<script>')[1]?.split('</script>')[0]
-  assert.ok(script)
-  new Script(script)
+test('the browser policy allows only the shipped script and stylesheet', async () => {
+  const app = createApp({
+    tokenHash: undefined,
+    review: async () => ({ status: 'unavailable', explanation: null }),
+  })
+  const response = await app.request('/')
+  const html = await response.text()
+  const directives = response.headers.get('content-security-policy')?.split('; ')
+  assert.equal(response.headers.get('strict-transport-security'), 'max-age=31536000')
+  for (const tag of ['style', 'script'] as const) {
+    const match = html.match(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`))
+    assert.ok(match?.[1])
+    const hash = createHash('sha256').update(match[1]).digest('base64')
+    assert.deepEqual(directives?.filter(directive => directive.startsWith(`${tag}-src`)), [
+      `${tag}-src 'sha256-${hash}'`,
+    ])
+    if (tag === 'script') new Script(match[1])
+  }
 })

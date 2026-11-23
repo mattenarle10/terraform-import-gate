@@ -18,6 +18,7 @@ interface ResourceChange {
 interface PlanSummary {
   version: 1
   complete: boolean
+  outputChanges?: boolean
   changes: ResourceChange[]
 }
 
@@ -84,6 +85,11 @@ export function summarizePlan(plan: unknown, target: ExpectedImport): PlanSummar
     })
   }
 
+  const outputs = plan.output_changes
+  const outputChanges = outputs !== undefined && (!isRecord(outputs) ||
+    Object.values(outputs).some(change =>
+      !isRecord(change) || !isDeepStrictEqual(change.actions, ['no-op'])))
+
   // A resource no-op is insufficient when Terraform has other work queued.
   const complete = plan.complete === true && plan.applyable === true && plan.errored === false &&
     ['action_invocations', 'deferred_changes', 'resource_drift'].every(key => {
@@ -91,11 +97,17 @@ export function summarizePlan(plan: unknown, target: ExpectedImport): PlanSummar
       return entries === undefined || (Array.isArray(entries) && entries.length === 0)
     })
 
-  return { version: 1, complete: complete && changes.length <= listLimit, changes: changes.slice(0, listLimit) }
+  return {
+    version: 1,
+    complete: complete && !outputChanges && changes.length <= listLimit,
+    outputChanges,
+    changes: changes.slice(0, listLimit),
+  }
 }
 
 export function validateSummary(summary: unknown): PlanSummary {
   if (!isRecord(summary) || summary.version !== 1 || typeof summary.complete !== 'boolean' ||
+      (summary.outputChanges !== undefined && typeof summary.outputChanges !== 'boolean') ||
       !Array.isArray(summary.changes) || summary.changes.length > listLimit) {
     throw new Error('Upload a version 1 summary from the import gate CLI.')
   }
@@ -103,6 +115,7 @@ export function validateSummary(summary: unknown): PlanSummary {
   return {
     version: 1,
     complete: summary.complete,
+    ...(typeof summary.outputChanges === 'boolean' ? { outputChanges: summary.outputChanges } : {}),
     changes: (summary.changes as unknown[]).map(change => {
       if (!isRecord(change)) throw new Error('The summary contains an invalid resource action.')
       const { type, actions: planned, imported, target, managed, moved, fields } = change
@@ -123,11 +136,15 @@ export function decide(summary: PlanSummary): GateDecision {
     change.moved || !isDeepStrictEqual(change.actions, ['no-op']) ||
     !change.imported || !change.managed || !change.target || change.type === 'unknown')
   const reasons = []
-  if (!summary.complete) reasons.push('The plan is incomplete, has drift, or contains unsupported work.')
+  if (summary.outputChanges) reasons.push('The plan would also change Terraform outputs.')
+  else if (!summary.complete) reasons.push('The plan is incomplete, has drift, contains unsupported work, or exceeds the review limit.')
   if (imports.length !== 1 || !imports[0]?.target || !imports[0]?.managed) {
     reasons.push('Check the resource address, import ID, and ARN against the one intended import.')
   }
   if (evidence.length > 0) reasons.push('The plan contains actions beyond the intended import.')
+  if (reasons.length === 0 && summary.outputChanges === undefined) {
+    reasons.push('Export the plan summary again to check Terraform outputs.')
+  }
 
   return { verdict: reasons.length === 0 ? 'IMPORT ONLY' : 'BLOCKED', reasons, evidence }
 }
