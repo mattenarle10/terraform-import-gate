@@ -61,6 +61,8 @@ For the live demo, invoke the deployed app to create its default log group. Use 
 
 ## Use from CI or an Agent
 
+Use this check when your team adopts an existing resource during day-two operations. For example, if Lambda created a log group during the first deployment, check the import before proposing a separate retention change. Share the exported summary in the change review and keep the exact saved plan in its Terraform workspace.
+
 Run `node scripts/cli.ts check` against the saved plan. The JSON result contains the verdict, reasons, and changed fields. Use exit code 0 to continue the workflow, 1 to stop for review, and 2 to fix the CLI input before retrying.
 
 For a remote summary review, send `{"summary": {...}, "note": "..."}` to `POST /review` with the deployment key in the `Authorization: Bearer` header. The note is optional. The response identifies its scope as `uploaded_summary` and includes the code verdict and agent status. Use the local check to decide whether the saved plan can proceed.
