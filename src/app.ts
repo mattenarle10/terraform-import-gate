@@ -53,7 +53,7 @@ export function createApp({ review, tokenHash }: AppConfig) {
       agent = await review(result, note)
     } catch (error) {
       console.error('Agent review failed', error instanceof Error ? error.name : 'Error')
-      agent = { status: 'unavailable', toolUsed: false, explanation: null }
+      agent = { status: 'unavailable', explanation: null }
     }
     return c.json({ scope: 'uploaded_summary', ...result, agent })
   })

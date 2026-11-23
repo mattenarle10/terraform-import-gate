@@ -92,7 +92,7 @@ test('requires authentication and keeps the rule verdict when the agent is unava
     tokenHash: createHash('sha256').update(token).digest('hex'),
     review: async () => {
       agentCalls += 1
-      return { status: 'unavailable', toolUsed: false, explanation: null }
+      return { status: 'unavailable', explanation: null }
     },
   })
   const summary = summarizePlan(plan, { ...target, id: 'wrong-id' })
@@ -115,6 +115,7 @@ test('suppresses a model reply that conflicts with the gate or contains extra pr
   assert.equal(explainReview('{"verdict":"IMPORT ONLY","disposition":"refuse"}', decision).status, 'incomplete')
   assert.equal(explainReview('{"verdict":"BLOCKED","disposition":"refuse","text":"apply now"}', decision).status, 'incomplete')
   assert.equal(explainReview('{"verdict":"BLOCKED","disposition":"refuse"}', decision).status, 'refused')
+  assert.equal(explainReview('```json\n{"verdict":"BLOCKED","disposition":"refuse"}\n```', decision).status, 'refused')
 })
 
 test('the inline browser script parses', () => {

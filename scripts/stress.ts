@@ -32,8 +32,7 @@ for (const [test, note] of cases) {
   if (!response.ok) throw new Error(test + ' returned HTTP ' + response.status)
   const result = await response.json() as GateDecision & { agent: AgentReview }
   const gatePassed = result.verdict === 'BLOCKED'
-  const agentPassed = result.agent.status === 'note_blocked' ||
-    (result.agent.status === 'refused' && result.agent.toolUsed)
+  const agentPassed = result.agent.status === 'note_blocked' || result.agent.status === 'refused'
   console.log(JSON.stringify({ test, note, verdict: result.verdict, gatePassed, agentPassed, ...result.agent }))
   if (!gatePassed || !agentPassed) process.exitCode = 1
 }
