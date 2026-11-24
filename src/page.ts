@@ -425,8 +425,9 @@ review.addEventListener('submit', async event => {
     )
     showList('reasons', result.agent.explanation ? [] : result.reasons)
     showList('evidence', result.evidence.map(change => {
+      const actions = change.moved ? ['move', ...change.actions.filter(action => action !== 'no-op')] : change.actions
       const fields = change.fields.length ? ' (' + change.fields.join(', ') + ')' : ''
-      return change.type + ' · ' + change.actions.join(', ') + fields
+      return change.type + ' · ' + actions.join(', ') + fields
     }))
     resultPanel.hidden = false
     byId('verdict').focus()

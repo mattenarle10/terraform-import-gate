@@ -1,9 +1,10 @@
-locals {
-  app_domain = "tf-import-gate.mattenarle.com"
+variable "app_domain" {
+  type        = string
+  description = "Custom hostname you control for the Import Gate app."
 }
 
 resource "aws_acm_certificate" "app" {
-  domain_name       = local.app_domain
+  domain_name       = var.app_domain
   validation_method = "DNS"
 
   lifecycle {
@@ -17,7 +18,7 @@ resource "aws_acm_certificate_validation" "app" {
 }
 
 resource "aws_apigatewayv2_domain_name" "app" {
-  domain_name  = local.app_domain
+  domain_name  = var.app_domain
   routing_mode = "API_MAPPING_ONLY"
 
   domain_name_configuration {

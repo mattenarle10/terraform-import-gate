@@ -22,7 +22,7 @@ Use Node.js 24, Terraform 1.13 or later, and an authenticated sandbox profile fo
 
 1. Run `npm ci --ignore-scripts`, `npm run check`, `npm test`, and `npm run build`.
 2. Run `terraform -chdir=deployments/import-gate init` and `terraform -chdir=deployments/import-gate validate`.
-3. Before deploying, confirm the sandbox account with STS. Set `TF_VAR_account_id` to the intended account number. Set `TF_VAR_access_token_sha256` to the SHA-256 digest of a randomly generated 32-byte access token. Keep the token in your password manager.
+3. Before deploying, confirm the sandbox account with STS. Set `TF_VAR_account_id` to the intended account number and `TF_VAR_app_domain` to a hostname you control. Set `TF_VAR_access_token_sha256` to the SHA-256 digest of a randomly generated 32-byte access token. Keep the token in your password manager.
 4. Review a saved Terraform deployment plan. Deploy it after review. The stack creates IAM roles, a regional HTTP API, a Lambda function, a Bedrock guardrail, and a managed AgentCore harness in Singapore. The Nova Lite inference profile can route the verdict and screened change note within APAC. Model calls and AWS resources can incur charges.
 5. Check `GET /health` and open the `app_url` output.
 
@@ -30,7 +30,7 @@ The Terraform provider sets `Project=terraform-import-gate` on supported resourc
 
 ## Custom Hostname
 
-The Singapore deployment maps `tf-import-gate.mattenarle.com` to the same HTTP API stage. Vercel manages its public DNS. The reusable module exposes the API ID and stage name for this mapping.
+The Singapore deployment sets `TF_VAR_app_domain=tf-import-gate.mattenarle.com`. Vercel manages its public DNS. Use your own hostname and DNS provider when you deploy a copy. The reusable module exposes the API ID and stage name for this mapping.
 
 1. Review a certificate-only Terraform plan for `aws_acm_certificate.app` and apply it. In Vercel, add the CNAME from the `certificate_validation_records` output. Keep it for ACM renewal.
 2. Add a CAA record for `tf-import-gate` authorizing `amazon.com` before the certificate is issued. The portfolio domain has its own issuer policy.
