@@ -8,6 +8,7 @@
   },
   "name": "terraform-import-gate",
   "scripts": {
+    "gate": "node scripts/cli.ts",
     "dev": "node --watch src/dev.ts",
     "test": "node --test test/*.test.ts",
     "build": "esbuild src/index.ts --bundle --platform=node --target=node24 --format=cjs --outfile=dist/index.js && zip -q -j dist/app.zip dist/index.js",
